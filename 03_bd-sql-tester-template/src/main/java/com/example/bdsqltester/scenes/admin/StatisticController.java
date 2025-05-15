@@ -49,7 +49,7 @@ public class StatisticController {
                     difficultyLevelLabel.setText("Easy");
                 } else if (averageGrade >= 50) {
                     difficultyLevelLabel.setText("Medium");
-                } else if (averageGrade > 0) {
+                } else if (averageGrade >= 0) {
                     difficultyLevelLabel.setText("Hard");
                 } else {
                     difficultyLevelLabel.setText("No Data");
