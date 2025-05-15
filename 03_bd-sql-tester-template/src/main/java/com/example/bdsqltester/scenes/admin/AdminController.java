@@ -1,22 +1,42 @@
 package com.example.bdsqltester.scenes.admin;
 
+import com.example.bdsqltester.HelloApplication;
 import com.example.bdsqltester.datasources.GradingDataSource;
 import com.example.bdsqltester.datasources.MainDataSource;
 import com.example.bdsqltester.dtos.Assignment;
+import com.example.bdsqltester.dtos.Grade;
+import com.example.bdsqltester.dtos.Submission;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 
+import java.io.IOException;
 import java.sql.*;
 import java.util.ArrayList;
 
 public class AdminController {
+    @FXML
+    private TableView<Submission> submissionHistoryTable;
+
+    @FXML
+    private TableColumn<Submission, String> submittedQueryColumn;
+
+    @FXML
+    private TableColumn<Submission, String> timestampColumn;
+
+    @FXML
+    private TableColumn<Submission, Long> userIdColumn;
+
+    @FXML
+    private TableColumn<Submission, Double> gradeColumn;
 
     @FXML
     private TextArea answerKeyField;
@@ -119,6 +139,40 @@ public class AdminController {
 
         // Set the answer key field
         answerKeyField.setText(assignment.answerKey);
+
+        loadSubmissionHistory(assignment.id);
+    }
+
+    private void loadSubmissionHistory(long assignmentId) {
+        submissionHistoryTable.getItems().clear();
+
+        ObservableList<Submission> submissionHistoryList = FXCollections.observableArrayList();
+        try (Connection conn = MainDataSource.getConnection()) {
+            String query = "SELECT * FROM submissions WHERE assignment_id = ?";
+            PreparedStatement stmt = conn.prepareStatement(query);
+            stmt.setLong(1, assignmentId);
+            ResultSet rs = stmt.executeQuery();
+
+            while (rs.next()) {
+                Submission history = new Submission(rs); // Menggunakan constructor ResultSet
+                submissionHistoryList.add(history);
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Database Error");
+            alert.setHeaderText("Failed to load submission history");
+            alert.setContentText(e.toString());
+            alert.showAndWait();
+        }
+
+        userIdColumn.setCellValueFactory(new PropertyValueFactory<>("userId"));
+        submittedQueryColumn.setCellValueFactory(new PropertyValueFactory<>("submittedQuery"));
+        gradeColumn.setCellValueFactory(new PropertyValueFactory<>("grade"));
+        timestampColumn.setCellValueFactory(new PropertyValueFactory<>("submissionTimestamp"));
+
+        submissionHistoryTable.setItems(submissionHistoryList);
     }
 
     @FXML
@@ -187,6 +241,64 @@ public class AdminController {
             alert.showAndWait();
             return;
         }
+        // New window -> display grades
+        Stage gradeStage = new Stage();
+        gradeStage.setTitle("Grades");
+
+        TableView<Grade> gradeTable = new TableView<>();
+
+        TableColumn<Grade, Long> userColumn = new TableColumn<>("User ID");
+        userColumn.setCellValueFactory(new PropertyValueFactory<>("userId"));
+
+        TableColumn<Grade, Long> assignmentColumn = new TableColumn<>("Assignment ID");
+        assignmentColumn.setCellValueFactory(new PropertyValueFactory<>("assignmentId"));
+
+        TableColumn<Grade, Double> gradeColumn = new TableColumn<>("Grade");
+        gradeColumn.setCellValueFactory(new PropertyValueFactory<>("grade"));
+
+        gradeTable.getColumns().add(userColumn);
+        gradeTable.getColumns().add(assignmentColumn);
+        gradeTable.getColumns().add(gradeColumn);
+
+        ObservableList<Grade> gradeList = fetchGradeFromDatabase();
+        gradeTable.setItems(gradeList);
+
+        StackPane root = new StackPane();
+        root.getChildren().add(gradeTable);
+        Scene scene = new Scene(root);
+        gradeStage.setScene(scene);
+        gradeStage.show();
+    }
+
+    private ObservableList<Grade> fetchGradeFromDatabase() {
+        ObservableList<Grade> gradeList = FXCollections.observableArrayList();
+        try (Connection c = MainDataSource.getConnection()) {
+            String query = "SELECT g.user_id, u.username, g.assignment_id, g.grade " +
+                    "FROM grades g " +
+                    "JOIN users u ON g.user_id = u.id " +
+                    "WHERE g.assignment_id = ?";
+            PreparedStatement stmt = c.prepareStatement(query);
+            stmt.setLong(1, Long.parseLong(idField.getText()));  // Use the selected assignment ID
+            ResultSet rs = stmt.executeQuery();
+
+            while (rs.next()) {
+                Grade grade = new Grade();
+                grade.setUserId(rs.getLong("user_id"));
+                grade.setAssignmentId(rs.getLong("assignment_id"));
+                grade.setGrade(rs.getDouble("grade"));
+                gradeList.add(grade);
+            }
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Database Error");
+            alert.setHeaderText("Failed to load grades");
+            alert.setContentText("Could not retrieve grades from the database.");
+            alert.showAndWait();
+        }
+
+        return gradeList;
     }
 
     @FXML
@@ -261,7 +373,7 @@ public class AdminController {
             // 5. Create layout and scene
             StackPane root = new StackPane();
             root.getChildren().add(tableView);
-            Scene scene = new Scene(root, 800, 600); // Adjust size as needed
+            Scene scene = new Scene(root); // Adjust size as needed
 
             // 6. Set scene and show stage
             stage.setScene(scene);
@@ -286,5 +398,81 @@ public class AdminController {
         }
     } // End of onTestButtonClick method
 
+    @FXML
+    void onDeleteAssignmentClick(ActionEvent event) {
+        if (idField.getText().isEmpty()) {
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Error");
+            alert.setHeaderText("No Assignment Selected");
+            alert.setContentText("Please select an assignment to delete.");
+            alert.showAndWait();
+            return;
+        }
 
+        try (Connection c = MainDataSource.getConnection()) {
+            String deleteGrades = "DELETE FROM grades WHERE assignment_id = ?";
+            PreparedStatement stmtGrades = c.prepareStatement(deleteGrades);
+            stmtGrades.setLong(1, Long.parseLong(idField.getText()));
+            stmtGrades.executeUpdate();
+
+            // Delete the selected assignment
+            String query = "DELETE FROM assignments WHERE id = ?";
+            PreparedStatement stmt = c.prepareStatement(query);
+            stmt.setLong(1, Long.parseLong(idField.getText()));
+            stmt.executeUpdate();
+            refreshAssignmentList();
+
+            Alert successAlert = new Alert(Alert.AlertType.INFORMATION);
+            successAlert.setTitle("Success");
+            successAlert.setHeaderText("Assignment Deleted");
+            successAlert.setContentText("The selected assignment has been successfully deleted.");
+            successAlert.showAndWait();
+
+            idField.clear();
+            nameField.clear();
+            instructionsField.clear();
+            answerKeyField.clear();
+
+        } catch (SQLException e) {
+            e.printStackTrace();
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Database Error");
+            alert.setHeaderText("Failed to delete assignment");
+            alert.setContentText("Could not retrieve assignment from the database.");
+            alert.showAndWait();
+        }
+    }
+
+    @FXML
+    void onViewStatisticClick(ActionEvent event) {
+        if (idField.getText().isEmpty()) {
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Error");
+            alert.setHeaderText("No Assignment Selected");
+            alert.setContentText("Please select an assignment to view statistics.");
+            alert.showAndWait();
+            return;
+        }
+        try {
+            long assignmentId = Long.parseLong(idField.getText());
+            // Memuat view statistik dengan melewatkan assignment_id
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/com/example/bdsqltester/statistic-view.fxml"));
+            Scene scene = new Scene(loader.load());
+            // Mendapatkan controller dari statistik view
+            StatisticController statisticController = loader.getController();
+            statisticController.loadStatistics(assignmentId);  // Panggil fungsi untuk load statistik berdasarkan assignment_id
+            // Menampilkan window baru dengan statistik
+            Stage stage = new Stage();
+            stage.setScene(scene);
+            stage.setTitle("Assignment Statistics");
+            stage.show();
+        } catch (IOException e) {
+            e.printStackTrace();
+            Alert alert = new Alert(Alert.AlertType.ERROR);
+            alert.setTitle("Error");
+            alert.setHeaderText("Failed to load statistics view");
+            alert.setContentText("Could not retrieve statistics from the database.");
+            alert.showAndWait();
+        }
+    }
 }
